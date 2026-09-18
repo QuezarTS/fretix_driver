@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,7 +16,7 @@ type QuickAction = {
   caption: string;
   icon: ComponentProps<typeof Ionicons>['name'];
   color: string;
-  route?: string;
+  route?: Href;
 };
 
 const quickActions: QuickAction[] = [

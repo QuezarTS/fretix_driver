@@ -17,5 +17,12 @@
     "nativewind-env.d.ts",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "src/components/load-create/**/*",
+    "src/components/load-details/**/*",
+    "src/components/proposals/**/*",
+    "src/components/vehicles/**/*",
+    "src/components/wallet/**/*"
   ]
 }

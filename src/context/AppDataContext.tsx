@@ -454,6 +454,42 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const getCachedLoadById = useCallback(
+    (id: number | null | undefined) => {
+      if (id == null) return undefined;
+
+      return (
+        state.availableLoads.data.find((item) => item.id === id) ??
+        state.myLoads.data.find((item) => item.id === id)
+      );
+    },
+    [state.availableLoads.data, state.myLoads.data],
+  );
+
+  const getCachedVehicleById = useCallback(
+    (id: number | null | undefined) => {
+      if (id == null) return undefined;
+      return state.availableVehicles.data.find(
+        (item) => item.id === id,
+      );
+    },
+    [state.availableVehicles.data],
+  );
+
+  const getCachedProposalById = useCallback(
+    (id: number | null | undefined) => {
+      if (id == null) return undefined;
+
+      return (
+        state.myProposals.data.find((item) => item.id === id) ??
+        state.receivedProposals.data.find(
+          (item) => item.id === id,
+        )
+      );
+    },
+    [state.myProposals.data, state.receivedProposals.data],
+  );
+
   const value = useMemo<AppDataContextType>(
     () => ({
       ...state,
@@ -473,6 +509,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       loadNotificationUnreadCountIfNeeded,
       refreshNotificationUnreadCount,
       ingestRealtimeNotification,
+      getCachedLoadById,
+      getCachedVehicleById,
+      getCachedProposalById,
       invalidateAll,
     }),
     [
@@ -493,6 +532,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       loadNotificationUnreadCountIfNeeded,
       refreshNotificationUnreadCount,
       ingestRealtimeNotification,
+      getCachedLoadById,
+      getCachedVehicleById,
+      getCachedProposalById,
       invalidateAll,
     ]
   );

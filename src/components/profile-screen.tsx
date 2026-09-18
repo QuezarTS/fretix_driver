@@ -330,7 +330,7 @@ function MenuSection({ onLogout }: { onLogout: () => void }) {
             if (item.danger) {
               onLogout();
             } else if (item.href) {
-              router.push(item.href as string);
+              router.push(item.href);
             }
           }}
           style={[styles.menuItem, index < items.length - 1 && styles.menuItemBorder]}>

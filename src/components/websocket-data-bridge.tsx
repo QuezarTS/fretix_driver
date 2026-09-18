@@ -18,7 +18,7 @@ const PROPOSAL_EVENTS = [
   'negotiation.rejected_ack',
 ] as const;
 
-const LOAD_EVENTS = ['trip.status_changed', 'trip.location'] as const;
+const LOAD_EVENTS = ['trip.status_changed', 'trip.location', 'trip.assigned'] as const;
 
 /** Liga eventos WebSocket globais às listas em cache do AppDataContext. */
 export function WebSocketDataBridge() {

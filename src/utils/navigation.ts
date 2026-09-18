@@ -4,13 +4,10 @@ import { useCallback } from 'react';
 import { BackHandler } from 'react-native';
 
 const FROM_ROUTES: Record<string, Href> = {
-  loads: '/loads',
-  my_loads: '/my_loads',
+  home: '/',
+  trips: '/trips',
   profile: '/profile',
-  vehicles: '/vehicles',
-  drivers: '/drivers',
-  trucks: '/trucks',
-  'my-proposals': '/my-proposals',
+  activities: '/activities',
   notifications: '/notifications',
 };
 

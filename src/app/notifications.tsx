@@ -220,6 +220,11 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  loadingState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',

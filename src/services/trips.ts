@@ -1,18 +1,29 @@
 import api from './api';
 
 export interface TripStopType {
-    id: string;
+    value: string;
     label: string;
 }
 
 export interface TripStop {
     id: number;
     trip_id: number;
-    stop_type: string;
-    location_name?: string | null;
-    address?: string | null;
-    notes?: string | null;
-    stopped_at: string;
+    category: string;
+    category_label: string;
+    location_name: string;
+    description: string;
+    created_by_user_id?: number | null;
+    created_by_type: 'empresa' | 'motorista' | string;
+    status: 'programada' | 'em_andamento' | 'concluida' | string;
+    started_at?: string | null;
+    completed_at?: string | null;
+    created_at: string;
+    delay_grace_hours?: number;
+    elapsed_seconds: number;
+    elapsed_hours?: number;
+    free_remaining_seconds?: number;
+    grace_period_exceeded?: boolean;
+    overtime_seconds?: number;
 }
 
 export interface TripLocation {
@@ -51,7 +62,6 @@ export interface TripLoadSummary {
     weight?: number | null;
     weight_unit?: string | null;
     volume?: number | null;
-    value?: number | null;
     negotiable?: boolean;
     origin: string;
     destination: string;
@@ -147,11 +157,9 @@ export interface TripLocationCreatePayload {
 }
 
 export interface TripStopCreatePayload {
-    stop_type: string;
-    location_name?: string;
-    address?: string;
-    notes?: string;
-    stopped_at?: string;
+    category: string;
+    location_name: string;
+    description: string;
 }
 
 export const tripService = {
@@ -203,17 +211,27 @@ export const tripService = {
     },
 
     async getTripStopTypes(): Promise<TripStopType[]> {
-        const response = await api.get('/driver/trips/stops/types');
+        const response = await api.get('/trip-stops/categories');
         return response.data;
     },
 
     async getTripStops(id: number | string): Promise<TripStop[]> {
-        const response = await api.get(`/driver/trips/${id}/stops`);
+        const response = await api.get(`/trip-stops/${id}`);
         return response.data;
     },
 
     async createTripStop(id: number | string, data: TripStopCreatePayload): Promise<TripStop> {
-        const response = await api.post(`/driver/trips/${id}/stops`, data);
+        const response = await api.post(`/trip-stops/${id}`, data);
+        return response.data;
+    },
+
+    async startTripStop(id: number | string, stopId: number): Promise<TripStop> {
+        const response = await api.patch(`/trip-stops/${id}/${stopId}/start`);
+        return response.data;
+    },
+
+    async completeTripStop(id: number | string, stopId: number): Promise<TripStop> {
+        const response = await api.patch(`/trip-stops/${id}/${stopId}/complete`);
         return response.data;
     },
 };

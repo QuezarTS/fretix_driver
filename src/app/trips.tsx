@@ -185,9 +185,14 @@ export default function TripsScreen() {
 
   useEffect(() => {
     const unsubscribe = addListenerForTypes(
-      ['trip.status_changed', 'trip.location'],
+      ['trip.status_changed', 'trip.location', 'trip.assigned'],
       (event) => {
         if (typeof event.trip_id !== 'number') return;
+
+        if (event.type === 'trip.assigned') {
+          void loadTrips(true);
+          return;
+        }
 
         setTrips((currentTrips) =>
           currentTrips.map((trip) => {

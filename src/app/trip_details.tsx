@@ -21,6 +21,7 @@ import { CustomDialog } from '@/components/custom-dialog';
 import { LoadTypeImage } from '@/components/load-type-image';
 import { TripStatusBadge, type LoadStatusType } from '@/components/trip-status-indicator';
 import { FretixColors } from '@/constants/theme';
+import { useWebSocket } from '@/context/WebSocketContext';
 import { useDriverTripLocationSharing } from '@/hooks/useDriverTripLocationSharing';
 import { useTripRealtime } from '@/hooks/useTripRealtime';
 import {
@@ -117,6 +118,15 @@ const formatDateTime = (dateStr: string | null | undefined) => {
     hour: '2-digit',
     minute: '2-digit',
   });
+};
+
+const formatWaitDuration = (seconds: number | null | undefined) => {
+  const safe = Math.max(0, Math.floor(seconds || 0));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+
+  if (hours > 0) return `${hours}h ${minutes}min`;
+  return `${minutes}min`;
 };
 
 const formatCurrency = (value: number | null | undefined) => {
@@ -709,6 +719,7 @@ export default function TripDetailsScreen() {
   const offRouteSamplesRef = useRef(0);
   const tripLoadRequestRef = useRef(0);
   useSmartBackHandler({ returnTo, from, fallback: '/trips' });
+  const { addListenerForTypes } = useWebSocket();
 
   const handleBack = () => goBackSmart({ returnTo, from, fallback: '/trips' });
 
@@ -828,7 +839,7 @@ export default function TripDetailsScreen() {
       }
     }
 
-    driverAnimatedCoordinate
+    (driverAnimatedCoordinate as any)
       .timing({
         latitude: displayNavigationLocation.latitude,
         longitude: displayNavigationLocation.longitude,
@@ -907,6 +918,32 @@ export default function TripDetailsScreen() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!numericTripId) return;
+
+    return addListenerForTypes(
+      [
+        'trip.stop_scheduled',
+        'trip.stop_started',
+        'trip.stop_completed',
+        'trip.delay_fee_started',
+      ],
+      (event) => {
+        if (
+          event.trip_id != null &&
+          Number(event.trip_id) !== numericTripId
+        ) {
+          return;
+        }
+
+        void tripService
+          .getTripStops(numericTripId)
+          .then(setStops)
+          .catch(() => undefined);
+      },
+    );
+  }, [numericTripId, addListenerForTypes]);
 
   useEffect(() => {
     const loadId = currentTrip?.load_id ?? currentTrip?.load?.id;
@@ -1433,7 +1470,35 @@ export default function TripDetailsScreen() {
   const isNearDestination = distanceToDestination === null || distanceToDestination <= 0.02;
   const canArrive = currentStatus === 'viagem_iniciada';
   const showFooter = canStartPickup || canArrivePickup || canConfirmLoaded || canStartDelivery || currentStatus === 'viagem_iniciada';
-  const journeyStages = getJourneyStages(currentTrip, currentStatus);
+  const coreJourneyStages = getJourneyStages(
+    currentTrip,
+    currentStatus,
+  );
+  const stopJourneyStages: JourneyStage[] = stops.map((stop) => ({
+    key: `stop-${stop.id}`,
+    title:
+      stop.status === 'programada'
+        ? `Paragem programada — ${stop.category_label}`
+        : stop.status === 'em_andamento'
+          ? `Paragem em andamento — ${stop.category_label}`
+          : `Paragem concluída — ${stop.category_label}`,
+    subtitle: `${stop.location_name} · ${stop.description}`,
+    time:
+      stop.completed_at ??
+      stop.started_at ??
+      stop.created_at,
+    state:
+      stop.status === 'concluida'
+        ? 'completed'
+        : stop.status === 'em_andamento'
+          ? 'active'
+          : 'upcoming',
+  }));
+  const journeyStages = [
+    ...coreJourneyStages.slice(0, 4),
+    ...stopJourneyStages,
+    ...coreJourneyStages.slice(4),
+  ];
   // For pickup phases point the map region towards origin; otherwise destination.
   const activeTarget = isHeadingToPickup ? originCoordinate : destinationCoordinate;
   const routeStartForRegion = originCoordinate ?? currentCoordinate;
@@ -1505,7 +1570,7 @@ export default function TripDetailsScreen() {
           {destinationCoordinate ? <Marker coordinate={destinationCoordinate} title="Destino" description={destination} pinColor={FretixColors.yellow} zIndex={6} /> : null}
           {liveMarker ? (
             <Marker.Animated
-              coordinate={driverAnimatedCoordinate}
+              coordinate={driverAnimatedCoordinate as any}
               title="Camião em movimento"
               description={
                 currentTrip.vehicle?.plate
@@ -1793,10 +1858,6 @@ export default function TripDetailsScreen() {
                     <Text style={styles.infoSub}>Peso: {load.weight} {load.weight_unit || 'kg'}</Text>
                   ) : null}
                 </View>
-                <View style={styles.priceWrap}>
-                  <Text style={styles.priceText}>{formatCurrency(load.value)}</Text>
-                  {load.negotiable ? <Text style={styles.negotiable}>Negociável</Text> : null}
-                </View>
               </View>
             </View>
           ) : null}
@@ -1864,7 +1925,7 @@ export default function TripDetailsScreen() {
 
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>Paradas</Text>
+              <Text style={styles.cardTitle}>Paragens</Text>
               <Pressable
                 onPress={() =>
                   pushWithReturnTo('/trip_stops', { id: currentTrip.id }, buildReturnTo('/trip_details', { id: currentTrip.id, returnTo }))
@@ -1874,14 +1935,14 @@ export default function TripDetailsScreen() {
               </Pressable>
             </View>
             {stops.length === 0 ? (
-              <Text style={styles.emptyText}>Nenhuma parada registrada ainda.</Text>
+              <Text style={styles.emptyText}>Nenhuma paragem registada ainda.</Text>
             ) : (
               stops.slice(0, 3).map((stop) => (
                 <View key={stop.id} style={styles.stopRow}>
                   <Ionicons name="pause-circle-outline" size={18} color={FretixColors.yellow} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.stopTitle}>{stop.location_name || stop.address || stop.stop_type}</Text>
-                    <Text style={styles.stopSub}>{stop.stop_type} · {formatDateTime(stop.stopped_at)}</Text>
+                    <Text style={styles.stopTitle}>{stop.location_name || stop.category_label || stop.category}</Text>
+                    <Text style={styles.stopSub}>{stop.category_label} · {stop.status === 'programada' ? 'Programada' : formatWaitDuration(stop.elapsed_seconds)}</Text>
                   </View>
                 </View>
               ))
@@ -2006,7 +2067,7 @@ export default function TripDetailsScreen() {
               }
             >
               <Ionicons name="add-circle-outline" size={18} color={FretixColors.white} />
-              <Text style={styles.secondaryBtnText}>Parada</Text>
+              <Text style={styles.secondaryBtnText}>Paragem</Text>
             </Pressable>
 
             {/* Step 1: Ir buscar a carga */}
