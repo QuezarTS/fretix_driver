@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
-import { router, type Href } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { router, type Href, useFocusEffect } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,8 @@ import { getUserRoleLabel } from '@/utils/user-role';
 import { BottomTabInset, FretixColors } from '@/constants/theme';
 import { TopAppHeader } from '@/components/top-app-header';
 import { UserAvatar } from '@/components/user-avatar';
+import { useLiveSpeedometer } from '@/hooks/useLiveSpeedometer';
+import { tripService, type Trip } from '@/services/trips';
 
 type QuickAction = {
   label: string;
@@ -41,6 +43,29 @@ function withAlpha(hexColor: string | undefined, alpha: number) {
 
 export function HomeScreen() {
   const { user } = useAuth();
+  const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
+  const speedometer = useLiveSpeedometer(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const loadActiveTrip = async () => {
+        try {
+          const trips = await tripService.getMyTrips('em_andamento');
+          const executing = trips.find((trip) =>
+            ['indo_carregar', 'chegou_origem', 'carregado', 'viagem_iniciada'].includes(trip.status),
+          );
+          if (active) setActiveTrip(executing ?? null);
+        } catch {
+          if (active) setActiveTrip(null);
+        }
+      };
+      void loadActiveTrip();
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   return (
     <View style={styles.container}>
@@ -53,8 +78,68 @@ export function HomeScreen() {
           <Header user={user} />
           <QuickActions />
           <PromoCard />
+          <SpeedometerCard speedKmh={speedometer.speedKmh} activeTrip={activeTrip} locationReady={speedometer.permissionGranted && speedometer.locationEnabled} />
         </ScrollView>
       </SafeAreaView>
+    </View>
+  );
+}
+
+function SpeedometerCard({
+  speedKmh,
+  activeTrip,
+  locationReady,
+}: {
+  speedKmh: number;
+  activeTrip: Trip | null;
+  locationReady: boolean;
+}) {
+  const speedColor = speedKmh >= 100 ? '#EF4444' : speedKmh >= 70 ? '#F97316' : '#22C55E';
+  const progress = Math.min(100, (speedKmh / 140) * 100);
+
+  const openNavigation = () => {
+    if (!activeTrip) return;
+    router.push({ pathname: '/trip_details', params: { id: String(activeTrip.id), returnTo: '/' } });
+  };
+
+  return (
+    <View style={styles.speedCard}>
+      <View style={styles.speedHeader}>
+        <View>
+          <Text style={styles.speedEyebrow}>VELOCIDADE EM TEMPO REAL</Text>
+          <Text style={styles.speedCaption}>
+            {locationReady ? 'Atualizada pelo GPS do telefone' : 'Ative a localização para medir'}
+          </Text>
+        </View>
+        <Pressable
+          style={[styles.navigationButton, !activeTrip && styles.navigationButtonDisabled]}
+          onPress={openNavigation}
+          disabled={!activeTrip}
+          accessibilityRole="button"
+          accessibilityLabel="Abrir navegação da viagem atual">
+          <Ionicons name="navigate" size={24} color={activeTrip ? '#101217' : '#6B7280'} />
+        </Pressable>
+      </View>
+
+      <View style={styles.speedBody}>
+        <View style={styles.speedValueRow}>
+          <Text style={[styles.speedValue, { color: speedColor }]}>{speedKmh}</Text>
+          <Text style={styles.speedUnit}>km/h</Text>
+        </View>
+        <View style={styles.speedTrack}>
+          <View style={[styles.speedProgress, { width: `${progress}%`, backgroundColor: speedColor }]} />
+        </View>
+        <View style={styles.speedScale}>
+          <Text style={styles.speedScaleText}>0</Text>
+          <Text style={styles.speedScaleText}>70</Text>
+          <Text style={styles.speedScaleText}>140</Text>
+        </View>
+        <Text style={styles.activeTripText} numberOfLines={1}>
+          {activeTrip
+            ? `Navegação disponível · Viagem #${activeTrip.id}`
+            : 'Sem viagem em execução'}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -103,7 +188,7 @@ function QuickActions() {
         <Pressable
           key={item.label}
           style={styles.quickCard}
-          onPress={item.route ? () => router.push(item.route) : undefined}
+          onPress={item.route ? () => router.push(item.route!) : undefined}
           accessibilityRole="button">
           <Ionicons name={item.icon} size={24} color={item.color} />
           <Text style={styles.quickLabel} numberOfLines={1} ellipsizeMode="tail">
@@ -336,6 +421,35 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  speedCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    backgroundColor: '#101720',
+    padding: 16,
+    gap: 14,
+  },
+  speedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  speedEyebrow: { color: FretixColors.yellow, fontSize: 11, fontWeight: '900', letterSpacing: 0.7 },
+  speedCaption: { color: FretixColors.grayLight, fontSize: 11, marginTop: 3 },
+  navigationButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: FretixColors.yellow,
+  },
+  navigationButtonDisabled: { backgroundColor: '#2B313A' },
+  speedBody: { gap: 7 },
+  speedValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  speedValue: { fontSize: 48, lineHeight: 54, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  speedUnit: { color: FretixColors.white, fontSize: 17, fontWeight: '700' },
+  speedTrack: { height: 9, borderRadius: 5, backgroundColor: '#273241', overflow: 'hidden' },
+  speedProgress: { height: '100%', borderRadius: 5 },
+  speedScale: { flexDirection: 'row', justifyContent: 'space-between' },
+  speedScaleText: { color: '#6B7280', fontSize: 10, fontWeight: '700' },
+  activeTripText: { color: '#CBD5E1', fontSize: 12, fontWeight: '600', marginTop: 3 },
   section: {
     gap: 10,
   },

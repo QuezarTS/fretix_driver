@@ -14,8 +14,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CustomDialog } from '@/components/custom-dialog';
 import { BottomTabInset, FretixColors } from '@/constants/theme';
 import { useTripRealtime } from '@/hooks/useTripRealtime';
+import { tripEvidenceService, type TripEvidenceSummary } from '@/services/trip-evidence';
 import { tripService, type Trip } from '@/services/trips';
-import { goBackSmart, useSmartBackHandler } from '@/utils/navigation';
+import { getApiErrorMessage } from '@/utils/api-error';
+import { buildReturnTo, goBackSmart, pushWithReturnTo, useSmartBackHandler } from '@/utils/navigation';
 
 function formatDateTime(value?: string | null) {
   if (!value) return '—';
@@ -37,6 +39,7 @@ export default function TripArrivalConfirmScreen() {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [evidenceSummary, setEvidenceSummary] = useState<TripEvidenceSummary | null>(null);
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogProps, setDialogProps] = useState({
     title: '',
@@ -62,8 +65,12 @@ export default function TripArrivalConfirmScreen() {
 
     try {
       setLoading(true);
-      const data = await tripService.getTrip(id);
+      const [data, evidenceData] = await Promise.all([
+        tripService.getTrip(id),
+        tripEvidenceService.summary(id).catch(() => null),
+      ]);
       setTrip(data);
+      setEvidenceSummary(evidenceData);
       applyTripSnapshot(data);
     } catch (error) {
       console.error('Failed to load trip for arrival confirmation:', error);
@@ -79,16 +86,24 @@ export default function TripArrivalConfirmScreen() {
 
   const handleConfirmArrival = async () => {
     if (!id) return;
+    if (!evidenceSummary?.delivery.finalized) {
+      pushWithReturnTo(
+        '/trip_evidence',
+        { id, stage: 'delivery' },
+        buildReturnTo('/trip_arrival_confirm', { id, returnTo }),
+      );
+      return;
+    }
 
     try {
       setConfirming(true);
       const updatedTrip = await tripService.endTrip(id);
       setTrip(updatedTrip);
       applyTripSnapshot(updatedTrip);
-      showDialog('Chegada confirmada', 'A viagem foi marcada como aguardando cliente.', 'success');
+      showDialog('Entrega registada', 'A entrega foi concluída. Aguarde apenas a confirmação do cliente.', 'success');
     } catch (error) {
       console.error('Failed to confirm trip arrival:', error);
-      showDialog('Erro', 'Não foi possível confirmar a chegada.', 'error');
+      showDialog('Erro', getApiErrorMessage(error, 'Não foi possível confirmar a chegada.'), 'error');
     } finally {
       setConfirming(false);
     }
@@ -106,6 +121,7 @@ export default function TripArrivalConfirmScreen() {
   const activeTrip = liveTrip ?? trip;
   const currentStatus = liveStatus ?? activeTrip?.status ?? null;
   const canConfirmArrival = currentStatus === 'viagem_iniciada';
+  const deliveryEvidenceReady = Boolean(evidenceSummary?.delivery.finalized);
 
   if (loading) {
     return (
@@ -155,7 +171,7 @@ export default function TripArrivalConfirmScreen() {
             </View>
             <Text style={styles.heroTitle}>Você chegou ao destino?</Text>
             <Text style={styles.heroSubtitle}>
-              Ao confirmar, a viagem muda para <Text style={styles.highlight}>aguardando_cliente</Text> e o cliente poderá validar a entrega.
+              Confirme que a carga foi entregue no local indicado. Depois disso, o cliente poderá validar o recebimento.
             </Text>
           </View>
 
@@ -192,9 +208,29 @@ export default function TripArrivalConfirmScreen() {
             <Ionicons name="information-circle-outline" size={20} color={FretixColors.yellow} />
             <View style={{ flex: 1 }}>
               <Text style={styles.warningTitle}>Antes de confirmar</Text>
-              <Text style={styles.warningText}>Confirme só depois de chegar ao destino final da viagem. Esta ação atualiza o estado no backend real.</Text>
+              <Text style={styles.warningText}>Confirme apenas quando o camião e a carga estiverem no destino final.</Text>
             </View>
           </View>
+
+          <Pressable
+            style={[styles.evidenceCard, deliveryEvidenceReady && styles.evidenceCardReady]}
+            onPress={() => id && pushWithReturnTo(
+              '/trip_evidence',
+              { id, stage: 'delivery' },
+              buildReturnTo('/trip_arrival_confirm', { id, returnTo }),
+            )}
+          >
+            <Ionicons name={deliveryEvidenceReady ? 'checkmark-circle' : 'camera'} size={24} color={deliveryEvidenceReady ? '#22C55E' : FretixColors.yellow} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.warningTitle}>Provas da entrega</Text>
+              <Text style={styles.warningText}>
+                {deliveryEvidenceReady
+                  ? 'Fotografias e comprovativo finalizados.'
+                  : `${evidenceSummary?.delivery.photo_count ?? 0}/3 fotografias · comprovativo ${evidenceSummary?.delivery.proof_of_delivery_count ? 'anexado' : 'em falta'}`}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </Pressable>
         </ScrollView>
 
         <View style={styles.footer}>
@@ -206,15 +242,19 @@ export default function TripArrivalConfirmScreen() {
           </Pressable>
 
           <Pressable
-            style={[styles.primaryButton, !canConfirmArrival && styles.primaryButtonDisabled]}
+            style={[styles.primaryButton, (!canConfirmArrival || !deliveryEvidenceReady) && styles.primaryButtonDisabled]}
             onPress={handleConfirmArrival}
-            disabled={!canConfirmArrival || confirming}
+            disabled={!canConfirmArrival || !deliveryEvidenceReady || confirming}
           >
             {confirming ? (
               <ActivityIndicator size="small" color="#101217" />
             ) : (
               <Text style={styles.primaryButtonText}>
-                {canConfirmArrival ? 'Confirmar chegada' : 'Chegada indisponível'}
+                {!canConfirmArrival
+                  ? 'Chegada indisponível'
+                  : deliveryEvidenceReady
+                    ? 'Confirmar chegada'
+                    : 'Finalize as provas da entrega'}
               </Text>
             )}
           </Pressable>
@@ -293,6 +333,17 @@ const styles = StyleSheet.create({
   },
   warningTitle: { color: FretixColors.white, fontSize: 14, fontWeight: '800' },
   warningText: { color: '#CBD5E1', fontSize: 13, lineHeight: 19, marginTop: 4 },
+  evidenceCard: {
+    backgroundColor: '#111824',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: FretixColors.yellow,
+    padding: 16,
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  evidenceCardReady: { borderColor: '#22C55E' },
   footer: {
     position: 'absolute',
     left: 0,

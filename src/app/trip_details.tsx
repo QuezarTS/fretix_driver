@@ -32,7 +32,9 @@ import {
   type MozambiquePlaceSuggestion,
 } from '@/services/google-maps';
 import { loadService, type LoadDetail } from '@/services/loads';
+import { tripEvidenceService, type TripEvidenceSummary } from '@/services/trip-evidence';
 import { tripService, type Trip, type TripLocation, type TripStop } from '@/services/trips';
+import { getApiErrorMessage } from '@/utils/api-error';
 import { resolveMediaUrl } from '@/utils/media-url';
 import { buildReturnTo, goBackSmart, pushWithReturnTo, useSmartBackHandler } from '@/utils/navigation';
 
@@ -44,6 +46,36 @@ const FOOTER_HEIGHT = 130;
 
 
 type Coordinate = MapCoordinate;
+type TripLoadError = {
+  title: string;
+  message: string;
+};
+
+const describeTripLoadError = (error: any): TripLoadError => {
+  const status = error?.response?.status;
+  if (status === 404) {
+    return {
+      title: 'Viagem não encontrada',
+      message: 'A viagem não existe ou já não está atribuída a este motorista.',
+    };
+  }
+  if (status >= 500) {
+    return {
+      title: 'Erro no servidor',
+      message: 'O servidor não conseguiu carregar a viagem. Tente novamente dentro de instantes.',
+    };
+  }
+  if (!error?.response) {
+    return {
+      title: 'Sem ligação',
+      message: 'Não foi possível contactar o servidor. Verifique a internet e tente novamente.',
+    };
+  }
+  return {
+    title: 'Não foi possível carregar',
+    message: getApiErrorMessage(error, 'Ocorreu um erro ao carregar os detalhes da viagem.'),
+  };
+};
 // Map matching visual + recálculo de rota.
 // Até 55 m da polyline, o marcador é encaixado visualmente na estrada.
 // Acima de 75 m por 2 amostras seguidas, consideramos desvio real e recalculamos.
@@ -54,6 +86,8 @@ const OFF_ROUTE_SAMPLES_REQUIRED = 2;
 const NAVIGATION_CAMERA_ZOOM = 17;
 const NAVIGATION_CAMERA_PITCH = 67;
 const GUIDANCE_HIGHLIGHT_DISTANCE_KM = 0.3;
+const NEAR_DESTINATION_DISTANCE_KM = 0.5;
+const ARRIVAL_MODAL_DISTANCE_KM = 0.05;
 const DEFAULT_MAP_CENTER: Coordinate = { latitude: -18.6657, longitude: 35.5296 };
 
 const normalizeTripStatus = (value?: string | null) =>
@@ -98,7 +132,7 @@ const getTripStatusLabel = (status: string) => {
   if (status === 'chegou_origem') return 'Chegou à Origem';
   if (status === 'carregado') return 'Carga Carregada';
   if (status === 'viagem_iniciada') return 'Em Viagem';
-  if (status === 'aguardando_cliente') return 'Aguardando Cliente';
+  if (status === 'aguardando_cliente') return 'Entrega realizada — confirmação pendente';
   if (status === 'concluida') return 'Concluída';
   if (status === 'cancelado') return 'Cancelada';
   return status.replace(/_/g, ' ');
@@ -529,11 +563,55 @@ const extractRoadNameFromInstruction = (instruction?: string | null) => {
 
 const getNextNavigationStep = (current: Coordinate, steps: GoogleRouteStep[]) => {
   if (steps.length === 0) return null;
-  const nextStep = steps.find((step) => getDistanceKm(current, step.endLocation) > 0.08) ?? steps[steps.length - 1];
+  const distances = steps.map((step) => getDistanceKm(current, step.endLocation));
+  const closestIndex = distances.reduce(
+    (best, distance, index) => distance < distances[best] ? index : best,
+    0,
+  );
+  const stepIndex = distances[closestIndex] <= 0.025
+    ? Math.min(closestIndex + 1, steps.length - 1)
+    : closestIndex;
+  const nextStep = steps[stepIndex];
   return {
     ...nextStep,
     distanceKm: getDistanceKm(current, nextStep.endLocation),
   };
+};
+
+const formatNavigationDistance = (distanceKm: number) =>
+  distanceKm < 1
+    ? `${Math.max(1, Math.round(distanceKm * 1000))} m`
+    : `${distanceKm.toFixed(1)} km`;
+
+const getManeuverGuidance = (step: (GoogleRouteStep & { distanceKm: number }) | null) => {
+  if (!step) return { icon: 'arrow-up' as const, instruction: 'Continue em frente' };
+
+  const maneuver = (step.maneuver ?? '').toLowerCase();
+  const roadName = extractRoadNameFromInstruction(step.instruction);
+  const suffix = roadName ? ` para ${roadName}` : '';
+
+  if (maneuver.includes('uturn')) {
+    return { icon: 'return-up-back' as const, instruction: `Faça o retorno${suffix}` };
+  }
+  if (maneuver.includes('roundabout')) {
+    return { icon: 'sync' as const, instruction: step.instruction || 'Entre na rotunda' };
+  }
+  if (maneuver.includes('left')) {
+    return {
+      icon: 'arrow-undo' as const,
+      instruction: `${maneuver.includes('slight') ? 'Mantenha-se ligeiramente à esquerda' : 'Vire à esquerda'}${suffix}`,
+    };
+  }
+  if (maneuver.includes('right')) {
+    return {
+      icon: 'arrow-redo' as const,
+      instruction: `${maneuver.includes('slight') ? 'Mantenha-se ligeiramente à direita' : 'Vire à direita'}${suffix}`,
+    };
+  }
+  if (maneuver.includes('merge')) {
+    return { icon: 'git-merge' as const, instruction: step.instruction || 'Entre na via indicada' };
+  }
+  return { icon: 'arrow-up' as const, instruction: step.instruction || 'Continue em frente' };
 };
 
 
@@ -677,7 +755,10 @@ export default function TripDetailsScreen() {
   const [loadedTripId, setLoadedTripId] = useState<string | null>(null);
   const [routeLoad, setRouteLoad] = useState<LoadDetail | null>(null);
   const [stops, setStops] = useState<TripStop[]>([]);
+  const [evidenceSummary, setEvidenceSummary] = useState<TripEvidenceSummary | null>(null);
+  const [blockingTrip, setBlockingTrip] = useState<Trip | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<TripLoadError | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [starting, setStarting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -691,6 +772,7 @@ export default function TripDetailsScreen() {
   const [currentPlace, setCurrentPlace] = useState<MozambiquePlaceSuggestion | null>(null);
   const [currentPlaceLoading, setCurrentPlaceLoading] = useState(false);
   const [currentZoneLabel, setCurrentZoneLabel] = useState<string | null>(null);
+  const [arrivalPromptVisible, setArrivalPromptVisible] = useState(false);
   const [dialogVisible, setDialogVisible] = useState(false);
   const [dialogProps, setDialogProps] = useState({
     title: '',
@@ -712,12 +794,15 @@ export default function TripDetailsScreen() {
     }),
   ).current;
   const previousDriverCoordinateRef = useRef<Coordinate | null>(null);
+  const arrivalPromptShownRef = useRef(false);
   const [driverBearing, setDriverBearing] = useState(0);
 
   const lastRerouteRef = useRef<{ coordinate: Coordinate; timestamp: number } | null>(null);
   const rerouteInFlightRef = useRef(false);
   const offRouteSamplesRef = useRef(0);
   const tripLoadRequestRef = useRef(0);
+  const tripLoadInFlightRef = useRef(false);
+  const lastAutomaticLoadIdRef = useRef<string | null>(null);
   useSmartBackHandler({ returnTo, from, fallback: '/trips' });
   const { addListenerForTypes } = useWebSocket();
 
@@ -767,10 +852,9 @@ export default function TripDetailsScreen() {
   const currentStatus = getEffectiveTripStatus(currentTrip, liveStatus);
   const isTripStarted = ['indo_carregar', 'chegou_origem', 'carregado', 'viagem_iniciada'].includes(currentStatus);
   const isHeadingToPickup = ['indo_carregar', 'chegou_origem'].includes(currentStatus);
-  // Mantém o GPS local activo durante as fases de navegação.
-  // O envio ao servidor só começa quando a viagem de entrega estiver oficialmente iniciada.
+  // Mantém o GPS ativo e guarda o percurso desde a saída para a recolha.
   const shouldTrackDriverLocation = isTripStarted;
-  const shouldPersistDriverLocation = currentStatus === 'viagem_iniciada';
+  const shouldPersistDriverLocation = isTripStarted;
 
   const {
     isSharing: isDriverLocationSharing,
@@ -865,26 +949,41 @@ export default function TripDetailsScreen() {
 
   const loadData = useCallback(
     async (silent = false) => {
-      if (!id) return;
+      if (!id || tripLoadInFlightRef.current) {
+        setRefreshing(false);
+        return;
+      }
+      tripLoadInFlightRef.current = true;
       const requestId = ++tripLoadRequestRef.current;
       try {
         if (!silent) setLoading(true);
-        const [tripData, stopsData, locationsData] = await Promise.all([
+        setLoadError(null);
+        const [tripData, stopsData, locationsData, evidenceData, inProgressTrips] = await Promise.all([
           tripService.getTrip(id),
           tripService.getTripStops(id).catch(() => []),
           tripService.getTripLocations(id).catch(() => []),
+          tripEvidenceService.summary(id).catch(() => null),
+          tripService.getMyTrips('em_andamento').catch(() => []),
         ]);
         if (requestId !== tripLoadRequestRef.current) return;
         setTrip(tripData);
         setLoadedTripId(id);
         setStops(stopsData);
         setLocationHistory(locationsData);
+        setEvidenceSummary(evidenceData);
+        setBlockingTrip(
+          inProgressTrips.find((item) =>
+            item.id !== tripData.id &&
+            ['indo_carregar', 'chegou_origem', 'carregado', 'viagem_iniciada'].includes(item.status),
+          ) ?? null,
+        );
         applyTripSnapshot(tripData);
       } catch (error) {
         if (requestId !== tripLoadRequestRef.current) return;
-        console.error('Failed to load trip details:', error);
-        showDialog('Erro', 'Não foi possível carregar os detalhes da viagem.', 'error');
+        console.error('Failed to load trip details:', (error as any)?.response?.data ?? error);
+        setLoadError(describeTripLoadError(error));
       } finally {
+        tripLoadInFlightRef.current = false;
         if (requestId === tripLoadRequestRef.current) {
           setLoading(false);
           setRefreshing(false);
@@ -902,9 +1001,14 @@ export default function TripDetailsScreen() {
     rerouteInFlightRef.current = false;
     offRouteSamplesRef.current = 0;
     setTrip(null);
+    setLoadError(null);
     setLoadedTripId(null);
+    setBlockingTrip(null);
+    setArrivalPromptVisible(false);
+    arrivalPromptShownRef.current = false;
     setRouteLoad(null);
     setStops([]);
+    setEvidenceSummary(null);
     setLocationHistory([]);
     setRoutePath([]);
     setRouteOptions([]);
@@ -916,8 +1020,10 @@ export default function TripDetailsScreen() {
   }, [id]);
 
   useEffect(() => {
+    if (!id || lastAutomaticLoadIdRef.current === id) return;
+    lastAutomaticLoadIdRef.current = id;
     void loadData();
-  }, [loadData]);
+  }, [id, loadData]);
 
   useEffect(() => {
     if (!numericTripId) return;
@@ -928,6 +1034,9 @@ export default function TripDetailsScreen() {
         'trip.stop_started',
         'trip.stop_completed',
         'trip.delay_fee_started',
+        'trip.evidence_uploaded',
+        'trip.pickup_evidence_finalized',
+        'trip.delivery_evidence_finalized',
       ],
       (event) => {
         if (
@@ -937,10 +1046,11 @@ export default function TripDetailsScreen() {
           return;
         }
 
-        void tripService
-          .getTripStops(numericTripId)
-          .then(setStops)
-          .catch(() => undefined);
+        if (String(event.type).includes('evidence')) {
+          void tripEvidenceService.summary(numericTripId).then(setEvidenceSummary).catch(() => undefined);
+        } else {
+          void tripService.getTripStops(numericTripId).then(setStops).catch(() => undefined);
+        }
       },
     );
   }, [numericTripId, addListenerForTypes]);
@@ -1268,6 +1378,14 @@ export default function TripDetailsScreen() {
 
   const handleStartPickup = async () => {
     if (!id) return;
+    if (blockingTrip) {
+      showDialog(
+        'Conclua a viagem atual',
+        `A viagem #${blockingTrip.id} ainda está em execução. Termine essa entrega antes de iniciar uma nova carga.`,
+        'info',
+      );
+      return;
+    }
     try {
       setStarting(true);
       const updated = await tripService.startPickupTrip(id);
@@ -1277,7 +1395,7 @@ export default function TripDetailsScreen() {
       showDialog('Indo Carregar', 'Iniciou o deslocamento para o local de carregamento. O mapa irá guiá-lo à Origem.', 'success');
     } catch (error) {
       console.error('Failed to start pickup trip:', error);
-      showDialog('Erro', 'Não foi possível iniciar o deslocamento para coleta.', 'error');
+      showDialog('Erro', getApiErrorMessage(error, 'Não foi possível iniciar o deslocamento para recolha.'), 'error');
     } finally {
       setStarting(false);
     }
@@ -1294,7 +1412,7 @@ export default function TripDetailsScreen() {
       showDialog('Chegou à Origem', 'Confirmou a chegada ao local de carregamento.', 'success');
     } catch (error) {
       console.error('Failed to confirm pickup arrival:', error);
-      showDialog('Erro', 'Não foi possível confirmar a chegada ao carregamento.', 'error');
+      showDialog('Erro', getApiErrorMessage(error, 'Não foi possível confirmar a chegada ao carregamento.'), 'error');
     } finally {
       setStarting(false);
     }
@@ -1302,6 +1420,14 @@ export default function TripDetailsScreen() {
 
   const handleConfirmLoaded = async () => {
     if (!id) return;
+    if (!evidenceSummary?.pickup.finalized) {
+      pushWithReturnTo(
+        '/trip_evidence',
+        { id, stage: 'pickup' },
+        buildReturnTo('/trip_details', { id, returnTo }),
+      );
+      return;
+    }
     try {
       setStarting(true);
       const updated = await tripService.confirmLoadedTrip(id);
@@ -1311,7 +1437,7 @@ export default function TripDetailsScreen() {
       showDialog('Carga Carregada', 'Confirmou o carregamento da carga no camião. Pode iniciar a viagem de entrega!', 'success');
     } catch (error) {
       console.error('Failed to confirm loaded:', error);
-      showDialog('Erro', 'Não foi possível confirmar o carregamento.', 'error');
+      showDialog('Erro', getApiErrorMessage(error, 'Não foi possível confirmar o carregamento.'), 'error');
     } finally {
       setStarting(false);
     }
@@ -1351,11 +1477,42 @@ export default function TripDetailsScreen() {
       );
     } catch (error) {
       console.error('Failed to start trip:', error);
-      showDialog('Erro', 'Não foi possível iniciar a viagem de entrega.', 'error');
+      showDialog('Erro', getApiErrorMessage(error, 'Não foi possível iniciar a viagem de entrega.'), 'error');
     } finally {
       setStarting(false);
     }
   };
+
+  const arrivalTarget = tripForRoute ?? currentTrip;
+  const arrivalDestinationCoordinate = arrivalTarget
+    ? getTripRouteData(arrivalTarget).destinationCoordinate
+    : null;
+
+  useEffect(() => {
+    if (
+      currentStatus !== 'viagem_iniciada' ||
+      !navigationLocation ||
+      !arrivalDestinationCoordinate
+    ) {
+      if (currentStatus !== 'viagem_iniciada') {
+        arrivalPromptShownRef.current = false;
+        setArrivalPromptVisible(false);
+      }
+      return;
+    }
+
+    const distanceKm = getDistanceKm(navigationLocation, arrivalDestinationCoordinate);
+    if (distanceKm <= ARRIVAL_MODAL_DISTANCE_KM && !arrivalPromptShownRef.current) {
+      arrivalPromptShownRef.current = true;
+      setArrivalPromptVisible(true);
+    }
+  }, [
+    currentStatus,
+    navigationLocation?.latitude,
+    navigationLocation?.longitude,
+    arrivalDestinationCoordinate?.latitude,
+    arrivalDestinationCoordinate?.longitude,
+  ]);
 
   if (loading && !currentTrip) {
     return (
@@ -1369,8 +1526,17 @@ export default function TripDetailsScreen() {
   if (!currentTrip) {
     return (
       <View style={styles.loaderContainer}>
-        <Ionicons name="alert-circle-outline" size={48} color={FretixColors.grayLight} />
-        <Text style={styles.loaderText}>Viagem não encontrada.</Text>
+        <Ionicons
+          name={loadError?.title === 'Sem ligação' ? 'cloud-offline-outline' : 'alert-circle-outline'}
+          size={48}
+          color={FretixColors.yellow}
+        />
+        <Text style={styles.errorTitle}>{loadError?.title ?? 'Não foi possível carregar'}</Text>
+        <Text style={styles.errorMessage}>{loadError?.message ?? 'Tente carregar novamente.'}</Text>
+        <Pressable onPress={() => void loadData()} style={styles.retryBtn}>
+          <Ionicons name="refresh" size={18} color="#101217" />
+          <Text style={styles.retryBtnText}>Tentar novamente</Text>
+        </Pressable>
         <Pressable onPress={handleBack} style={styles.backBtn}>
           <Text style={styles.backBtnText}>Voltar</Text>
         </Pressable>
@@ -1435,6 +1601,7 @@ export default function TripDetailsScreen() {
     currentCoordinate,
     primaryRoute?.steps ?? [],
   );
+  const maneuverGuidance = getManeuverGuidance(nextStep);
   const currentRoadName =
     extractRoadNameFromInstruction(nextStep?.instruction) ??
     (
@@ -1467,7 +1634,7 @@ export default function TripDetailsScreen() {
   const canConfirmLoaded = currentStatus === 'chegou_origem';
   const canStartDelivery = currentStatus === 'carregado';
   const distanceToDestination = navigationLocation && destinationCoordinate ? getDistanceKm(navigationLocation, destinationCoordinate) : null;
-  const isNearDestination = distanceToDestination === null || distanceToDestination <= 0.02;
+  const isNearDestination = distanceToDestination != null && distanceToDestination <= NEAR_DESTINATION_DISTANCE_KM;
   const canArrive = currentStatus === 'viagem_iniciada';
   const showFooter = canStartPickup || canArrivePickup || canConfirmLoaded || canStartDelivery || currentStatus === 'viagem_iniciada';
   const coreJourneyStages = getJourneyStages(
@@ -1597,16 +1764,20 @@ export default function TripDetailsScreen() {
         {isTripStarted ? (
           <View style={styles.navigationCard} pointerEvents="none">
             <View style={styles.navigationIcon}>
-              <Ionicons name="navigate" size={22} color="#0B0F14" />
+              <Ionicons name={maneuverGuidance.icon} size={25} color="#0B0F14" />
             </View>
             <View style={styles.navigationTexts}>
               <Text style={styles.navigationDistance}>
-                {nextStep
-                  ? `${nextStep.distanceKm < 1 ? Math.round(nextStep.distanceKm * 1000) : nextStep.distanceKm.toFixed(1)} ${nextStep.distanceKm < 1 ? 'm' : 'km'}`
-                  : 'A guiar'}
+                {currentStatus === 'viagem_iniciada' && isNearDestination && distanceToDestination != null
+                  ? `Faltam ${formatNavigationDistance(distanceToDestination)} para chegar`
+                  : nextStep
+                    ? `Em ${formatNavigationDistance(nextStep.distanceKm)}`
+                    : 'Continue pela rota'}
               </Text>
               <Text style={styles.navigationInstruction} numberOfLines={2}>
-                {nextStep?.instruction ?? `Siga para ${destination}`}
+                {currentStatus === 'viagem_iniciada' && isNearDestination
+                  ? `Continue até ${destination}`
+                  : maneuverGuidance.instruction}
               </Text>
               <Text style={styles.navigationRoad} numberOfLines={1}>
                 {currentRoadName}
@@ -2072,13 +2243,18 @@ export default function TripDetailsScreen() {
 
             {/* Step 1: Ir buscar a carga */}
             {canStartPickup ? (
-              <Pressable style={[styles.primaryBtn]} onPress={handleStartPickup} disabled={starting}>
+              <Pressable
+                style={[styles.primaryBtn, blockingTrip && styles.primaryBtnBlocked]}
+                onPress={handleStartPickup}
+                disabled={starting}>
                 {starting ? (
                   <ActivityIndicator color="#101217" />
                 ) : (
                   <>
                     <Ionicons name="navigate" size={18} color="#101217" />
-                    <Text style={styles.primaryBtnText}>Indo Carregar</Text>
+                    <Text style={styles.primaryBtnText}>
+                      {blockingTrip ? `Concluir viagem #${blockingTrip.id}` : 'Iniciar recolha'}
+                    </Text>
                   </>
                 )}
               </Pressable>
@@ -2105,8 +2281,16 @@ export default function TripDetailsScreen() {
                   <ActivityIndicator color="#101217" />
                 ) : (
                   <>
-                    <Ionicons name="cube" size={18} color="#101217" />
-                    <Text style={styles.primaryBtnText}>Confirmar Carregamento</Text>
+                    <Ionicons
+                      name={evidenceSummary?.pickup.finalized ? 'cube' : 'camera'}
+                      size={18}
+                      color="#101217"
+                    />
+                    <Text style={styles.primaryBtnText}>
+                      {evidenceSummary?.pickup.finalized
+                        ? 'Confirmar Carregamento'
+                        : `Provas da Recolha (${evidenceSummary?.pickup.photo_count ?? 0}/3)`}
+                    </Text>
                   </>
                 )}
               </Pressable>
@@ -2154,12 +2338,31 @@ export default function TripDetailsScreen() {
         onConfirm={() => setDialogVisible(false)}
         onCancel={() => setDialogVisible(false)}
       />
+      <CustomDialog
+        visible={arrivalPromptVisible}
+        title="Chegou ao destino"
+        message={`Está junto ao destino da carga: ${destination}. Confirme a chegada para concluir a entrega.`}
+        type="success"
+        confirmText="Confirmar chegada"
+        cancelText="Ainda não"
+        showCancel
+        onCancel={() => setArrivalPromptVisible(false)}
+        onConfirm={() => {
+          setArrivalPromptVisible(false);
+          pushWithReturnTo(
+            '/trip_arrival_confirm',
+            { id: currentTrip.id },
+            buildReturnTo('/trip_details', { id: currentTrip.id, returnTo }),
+          );
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0F14' },
+  primaryBtnBlocked: { backgroundColor: '#F59E0B', opacity: 0.88 },
   loaderContainer: {
     flex: 1,
     backgroundColor: FretixColors.black,
@@ -2167,6 +2370,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
   },
+  errorTitle: { color: FretixColors.white, fontSize: 19, fontWeight: '800', textAlign: 'center' },
+  errorMessage: { color: '#CBD5E1', fontSize: 14, lineHeight: 20, textAlign: 'center', maxWidth: 330 },
+  retryBtn: {
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: FretixColors.yellow,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  retryBtnText: { color: '#101217', fontSize: 15, fontWeight: '800' },
   loaderText: { color: FretixColors.grayLight, fontSize: 14 },
   backBtn: {
     marginTop: 8,

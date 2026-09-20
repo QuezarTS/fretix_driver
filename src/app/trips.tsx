@@ -46,6 +46,7 @@ const normalizeStatus = (value?: string | null) =>
     .replace(/[\u0300-\u036f]/g, '');
 
 const COMPLETED_STATUSES = new Set([
+  'aguardando_cliente',
   'concluida',
   'concluido',
   'completed',
@@ -58,6 +59,11 @@ const isCompletedTrip = (trip: Trip) =>
   COMPLETED_STATUSES.has(normalizeStatus(trip.status)) ||
   Boolean(trip.completed_at) ||
   Boolean(trip.client_confirmed_at);
+
+const isPendingClientConfirmation = (trip: Trip) =>
+  normalizeStatus(trip.status) === 'aguardando_cliente' &&
+  !trip.client_confirmed_at &&
+  !trip.completed_at;
 
 const isCancelledTrip = (trip: Trip) =>
   normalizeStatus(trip.status) === 'cancelado';
@@ -367,7 +373,7 @@ export default function TripsScreen() {
                 </Text>
                 <Text style={styles.emptySubtitle}>
                   {activeTab === 'Concluídas'
-                    ? 'Quando o cliente confirmar a entrega, a viagem aparecerá aqui.'
+                    ? 'As entregas realizadas e as confirmações do cliente aparecerão aqui.'
                     : 'As viagens atribuídas ao seu perfil ou camião aparecerão aqui.'}
                 </Text>
               </View>
@@ -383,6 +389,7 @@ export default function TripsScreen() {
                 (item.load?.load_type
                   ? `Carga de ${item.load.load_type}`
                   : `Viagem #${item.id}`);
+              const pendingConfirmation = isPendingClientConfirmation(item);
 
               return (
                 <Pressable
@@ -434,7 +441,15 @@ export default function TripsScreen() {
                       </Text>
                     </View>
 
-                    <TripStatusBadge status={mapTripStatus(item)} />
+                    <View style={styles.cardStatusColumn}>
+                      <TripStatusBadge status={mapTripStatus(item)} />
+                      {pendingConfirmation ? (
+                        <View style={styles.pendingPill}>
+                          <Ionicons name="time-outline" size={12} color="#FBBF24" />
+                          <Text style={styles.pendingPillText}>Confirmação pendente</Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </View>
 
                   <View style={styles.routeRow}>
@@ -667,6 +682,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
   },
+  cardStatusColumn: { alignItems: 'flex-end', gap: 6, maxWidth: 142 },
+  pendingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(251,191,36,0.11)',
+  },
+  pendingPillText: { color: '#FBBF24', fontSize: 9, fontWeight: '800' },
   cardTitle: {
     color: FretixColors.white,
     fontSize: 15,

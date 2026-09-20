@@ -16,6 +16,7 @@ export default function AppTabs() {
     '/trip_stops',
     '/trip_stop_details',
     '/trip_arrival_confirm',
+    '/trip_evidence',
   ].includes(pathname);
 
   const tabSlotStyle = StyleSheet.flatten([
@@ -36,6 +37,7 @@ export default function AppTabs() {
         <TabTrigger name="trip_details" href="/trip_details" />
         <TabTrigger name="trip_stops" href="/trip_stops" />
         <TabTrigger name="trip_arrival_confirm" href="/trip_arrival_confirm" />
+        <TabTrigger name="trip_evidence" href="/trip_evidence" />
       </TabList>
 
       {!hideTabBar && (

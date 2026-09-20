@@ -32,6 +32,7 @@ export interface TripLocation {
     latitude: number;
     longitude: number;
     speed: number | null;
+    phase?: string | null;
     created_at: string;
 }
 
@@ -134,6 +135,8 @@ export interface Trip {
     traveled_distance_km?: number | null;
     progress_percent?: number | null;
     estimated_time: string | null;
+    pickup_distance_km?: number | null;
+    pickup_estimated_time?: string | null;
     departure_date: string | null;
     created_at: string;
     stops?: TripStop[];

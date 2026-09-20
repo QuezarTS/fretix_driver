@@ -133,7 +133,7 @@ export function ProposalsReceivedScreen({ variant = 'flow' }: ProposalsReceivedS
                   {headerLoad ? `${headerLoad.origin} -> ${headerLoad.destination}` : 'Propostas nas suas cargas'}
                 </Text>
                 <Text style={styles.cargoDates}>
-                  {headerLoad ? `${formatDate(headerLoad.departure_date)} · ${headerLoad.load_name}` : 'Lista real da API'}
+                  {headerLoad ? `${formatDate(headerLoad.departure_date)} · ${headerLoad.load_name}` : 'Propostas disponíveis'}
                 </Text>
               </View>
               <View style={styles.availableBadge}>

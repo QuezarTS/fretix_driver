@@ -60,7 +60,7 @@ const STATUS_CONFIG: Record<LoadStatusType, StatusConfig> = {
         progressPercentage: 50,
     },
     em_andamento: {
-        label: 'Aguardando',
+        label: 'Confirmação pendente',
         color: '#F59E0B',
         backgroundColor: 'rgba(245, 158, 11, 0.16)',
         icon: 'hourglass-outline',
