@@ -79,8 +79,9 @@
       "googleMapsApiKey": "AIzaSyDqxJoy4L6vgqYu2mgbx_0Jzh6JF18WADM",
       "googleClientId": "750540528154-nl33mipe4r1g6lnbam1k3kp59ukm9gg2.apps.googleusercontent.com",
       "eas": {
-        "projectId": "16809afb-6d6f-4933-aea5-279f55fcea6b"
+        "projectId": "58e9bfe6-e573-48c7-bc2d-e5e0011249bc"
       }
-    }
+    },
+    "owner": "ghost04"
   }
 }
