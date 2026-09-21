@@ -1744,13 +1744,19 @@ export default function TripDetailsScreen() {
                   ? `Matrícula ${currentTrip.vehicle.plate}`
                   : 'Localização actual do motorista'
               }
-              image={require('../../assets/truck_marker.png')}
               anchor={{ x: 0.5, y: 0.5 }}
               flat
               rotation={truckMarkerRotation}
               zIndex={20}
-              tracksViewChanges={false}
-            />
+              tracksViewChanges={false}>
+              <View style={styles.truckMarkerWrap} collapsable={false}>
+                <Image
+                  source={require('../../assets/truck_marker.png')}
+                  style={styles.truckMarkerImage}
+                  resizeMode="contain"
+                />
+              </View>
+            </Marker.Animated>
           ) : null}
         </MapView>
 
@@ -2459,19 +2465,19 @@ const styles = StyleSheet.create({
   navigationInstruction: { color: FretixColors.white, fontSize: 16, fontWeight: '800', lineHeight: 20 },
   navigationRoad: { color: '#AAB2BE', fontSize: 12, fontWeight: '700', marginTop: 3 },
   truckMarkerWrap: {
-    width: 46,
-    height: 86,
+    width: 26,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 5,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.28,
+    shadowRadius: 3,
+    elevation: 6,
   },
   truckMarkerImage: {
-    width: 42,
-    height: 82,
+    width: 22,
+    height: 42,
   },
   destinationPlaceLabel: {
     maxWidth: 145,
